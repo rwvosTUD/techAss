@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from sklearn.metrics import confusion_matrix
 from torchvision import transforms, models
 from PIL import Image
 
@@ -105,7 +105,30 @@ class RealOrFakeDataset(Dataset):
 
 #%% Training/testing related
 
-def train_epoch(device, train_loader, net, optimizer, criterion):
+def compute_metrics(true, pred):
+    threshold = 0.47058823529411764 # training set threshold
+    
+    correct = (pred == true).sum().item()
+    CM =confusion_matrix(true.cpu(), pred.cpu(),labels=[0,1])        
+    tn=CM[0][0]
+    tp=CM[1][1]
+    fp=CM[0][1]
+    fn=CM[1][0] 
+    
+    ''' todo remove
+    recall=tp/(tp+fn)
+    precision=tp/(tp+fp)
+    F1 = (2*recall*precision)/(recall+precision)
+    #'''
+    
+    # collect
+    metrics = np.array([[correct, tn, tp, fp, fn]])
+
+    return metrics
+    
+    
+
+def train_epoch(device, train_loader, net, optimizer, criterion, threshold):
     """
     Trains network for one epoch in batches.
 
@@ -119,7 +142,7 @@ def train_epoch(device, train_loader, net, optimizer, criterion):
     avg_loss = 0
     correct = 0
     total = 0
-
+    metrics = np.zeros((1,5))
     # iterate through batches
     for i, data in enumerate(train_loader):
         # get the inputs; data is a list of [inputs, labels]
@@ -136,15 +159,28 @@ def train_epoch(device, train_loader, net, optimizer, criterion):
         loss.backward()
         optimizer.step()
 
-        # keep track of loss and accuracy
+        # keep track of metrics
         avg_loss += loss
-        predicted =  torch.where(outputs.data > 0.5, 1., 0.)
+        predicted =  torch.where(outputs.data > threshold, 1., 0.)
+        metrics += compute_metrics(labels, predicted)
         total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        #correct += (predicted == labels).sum().item()
 
-    return avg_loss/len(train_loader), 100 * correct / total
+    # collect metrics
+    metrics_epoch = {}
+    metrics_epoch["accuracy"] = metrics[0,0]/total
+    metrics_epoch["tn"] =  metrics[0,1]
+    metrics_epoch["tp"] =  metrics[0,2]
+    metrics_epoch["fp"] =  metrics[0,3]
+    metrics_epoch["fn"] =  metrics[0,4]
+    metrics_epoch["precision"] = metrics_epoch["tp"]/(metrics_epoch["tp"]+metrics_epoch["fp"])
+    metrics_epoch["recall"] = metrics_epoch["tp"]/(metrics_epoch["tp"]+metrics_epoch["fn"]) 
+    metrics_epoch["F1"] = (2*metrics_epoch["recall"]*metrics_epoch["precision"])/(metrics_epoch["recall"]+metrics_epoch["precision"])*100
+    
+    return avg_loss/len(train_loader), metrics_epoch
         
-def test_epoch(device, test_loader, net, criterion):
+
+def test_epoch(device, test_loader, net, criterion, threshold):
     """
     Evaluates network in batches.
 
@@ -157,7 +193,7 @@ def test_epoch(device, test_loader, net, criterion):
     avg_loss = 0
     correct = 0
     total = 0
-    
+    metrics = np.zeros((1,5))
     # Use torch.no_grad to skip gradient calculation, not needed for evaluation
     with torch.no_grad():
         # iterate through batches
@@ -171,13 +207,27 @@ def test_epoch(device, test_loader, net, criterion):
             outputs = net(inputs)
             loss = criterion(outputs, labels.float())
 
-            # keep track of loss and accuracy
+            # keep track of metrics
             avg_loss += loss
-            predicted = torch.where(outputs.data > 0.5, 1., 0.)
+            predicted =  torch.where(outputs.data > threshold, 1., 0.)
+            metrics += compute_metrics(labels, predicted)
             total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            #correct += (predicted == labels).sum().item()
+    
+        # collect metrics
+        metrics_epoch = {}
+        #metrics_epoch["metrics"] = metrics
+        metrics_epoch["accuracy"] = metrics[0,0]/total
+        metrics_epoch["tn"] =  metrics[0,1]
+        metrics_epoch["tp"] =  metrics[0,2]
+        metrics_epoch["fp"] =  metrics[0,3]
+        metrics_epoch["fn"] =  metrics[0,4]
+        metrics_epoch["precision"] = metrics_epoch["tp"]/(metrics_epoch["tp"]+metrics_epoch["fp"])
+        metrics_epoch["recall"] = metrics_epoch["tp"]/(metrics_epoch["tp"]+metrics_epoch["fn"]) 
+        metrics_epoch["F1"] = (2*metrics_epoch["recall"]*metrics_epoch["precision"])/(metrics_epoch["recall"]+metrics_epoch["precision"])*100
+    
 
-    return avg_loss/len(test_loader), 100 * correct / total
+    return avg_loss/len(test_loader), metrics_epoch
 
 
 
