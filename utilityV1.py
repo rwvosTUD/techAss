@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.metrics import confusion_matrix
 from torchvision import transforms, models
-from PIL import Image
+from PIL import Image, ImageOps
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -43,7 +43,7 @@ class RealOrFakeDataset(Dataset):
     Dataset class for the real and fake faces
     '''
 
-    def __init__(self, img_dir: str, version: str, transform=None,):
+    def __init__(self, img_dir: str, version: str, transform=None,img_conversion = "RGB"):
         '''
 
         Parameters:
@@ -55,6 +55,7 @@ class RealOrFakeDataset(Dataset):
 
         self.img_dir = img_dir
         self.version = version 
+        self.img_conversion = img_conversion
         self.transform = transform
         self.real_path = os.listdir(img_dir + f'{version}/real/')
         self.fake_path = os.listdir(img_dir + f'{version}/fake/')
@@ -65,6 +66,8 @@ class RealOrFakeDataset(Dataset):
 
         self.resize = transforms.Resize([224, 224])
         self.to_tensor = transforms.ToTensor()
+        
+        
 
     def read_image(self, img_path: str):
         '''
@@ -77,12 +80,17 @@ class RealOrFakeDataset(Dataset):
           Returns:
             tensor_img: transformed image in tensor format 
         '''
-        img = Image.open(img_path).convert('RGB')
+        img = Image.open(img_path)
+        if self.img_conversion == "RGB":
+            img = img.convert("RGB")
+        else:
+            # convert to grayscale
+            img = ImageOps.grayscale(img)
 
         img = self.resize(img)
 
         tensor_img = self.to_tensor(img)
-        #tensor_img = tensor_img.unsqueeze(0) # todo activate again?
+        #tensor_img = tensor_img.unsqueeze(0) # commented as later it had to be squeezed again
 
         return tensor_img 
 
@@ -106,6 +114,16 @@ class RealOrFakeDataset(Dataset):
 #%% Training/testing related
 
 def compute_metrics(true, pred):
+    '''
+    Computes confusion matrix and associated metrics (tn,tp,precision, etc.)
+    
+    Args:
+        true: Labels associated with input batches
+        pred: Neural network's label predictions
+        
+    Returns:
+        metrics: containers for all previously mentioned metrics 
+    '''
     threshold = 0.47058823529411764 # training set threshold
     
     correct = (pred == true).sum().item()
@@ -137,6 +155,10 @@ def train_epoch(device, train_loader, net, optimizer, criterion, threshold):
         net: Neural network model.
         optimizer: Optimizer (e.g. SGD).
         criterion: Loss function (e.g. cross-entropy loss).
+        
+    Returns:
+        avg_loss: average loss for the epoch
+        metrics_epoch: dictionary containing all relevant metrics
     """
   
     avg_loss = 0
@@ -164,7 +186,6 @@ def train_epoch(device, train_loader, net, optimizer, criterion, threshold):
         predicted =  torch.where(outputs.data > threshold, 1., 0.)
         metrics += compute_metrics(labels, predicted)
         total += labels.size(0)
-        #correct += (predicted == labels).sum().item()
 
     # collect metrics
     metrics_epoch = {}
@@ -177,7 +198,8 @@ def train_epoch(device, train_loader, net, optimizer, criterion, threshold):
     metrics_epoch["recall"] = metrics_epoch["tp"]/(metrics_epoch["tp"]+metrics_epoch["fn"]) 
     metrics_epoch["F1"] = (2*metrics_epoch["recall"]*metrics_epoch["precision"])/(metrics_epoch["recall"]+metrics_epoch["precision"])*100
     
-    return avg_loss/len(train_loader), metrics_epoch
+    avg_loss = avg_loss/len(train_loader) # scale the loss to make it average
+    return avg_loss, metrics_epoch
         
 
 def test_epoch(device, test_loader, net, criterion, threshold):
@@ -188,6 +210,10 @@ def test_epoch(device, test_loader, net, criterion, threshold):
         test_loader: Data loader for test set.
         net: Neural network model.
         criterion: Loss function (e.g. cross-entropy loss).
+        
+    Returns:
+        avg_loss: average loss for the epoch
+        metrics_epoch: dictionary containing all relevant metrics
     """
 
     avg_loss = 0
@@ -212,7 +238,6 @@ def test_epoch(device, test_loader, net, criterion, threshold):
             predicted =  torch.where(outputs.data > threshold, 1., 0.)
             metrics += compute_metrics(labels, predicted)
             total += labels.size(0)
-            #correct += (predicted == labels).sum().item()
     
         # collect metrics
         metrics_epoch = {}
@@ -227,7 +252,8 @@ def test_epoch(device, test_loader, net, criterion, threshold):
         metrics_epoch["F1"] = (2*metrics_epoch["recall"]*metrics_epoch["precision"])/(metrics_epoch["recall"]+metrics_epoch["precision"])*100
     
 
-    return avg_loss/len(test_loader), metrics_epoch
+        avg_loss = avg_loss/len(test_loader) # scale the loss to make it average
+    return avg_loss, metrics_epoch
 
 
 
